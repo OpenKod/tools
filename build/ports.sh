@@ -1,6 +1,6 @@
 #!/bin/sh
 
-# Copyright (c) 2014-2015 Franco Fichtner <franco@opnsense.org>
+# Copyright (c) 2014-2018 Franco Fichtner <franco@opnsense.org>
 #
 # Redistribution and use in source and binary forms, with or without
 # modification, are permitted provided that the following conditions
@@ -27,85 +27,168 @@
 
 set -e
 
-. ./common.sh && $(${SCRUB_ARGS})
+SELF=ports
 
-PORT_LIST=$(cat ${PRODUCT_CONFIG}/ports.conf)
+. ./common.sh
 
-git_clear ${PORTSDIR}
-git_clear ${SRCDIR}
+if [ -z "${PORTS_LIST}" ]; then
+	PORTS_LIST=$(
+cat ${CONFIGDIR}/ports.conf | while read PORT_ORIGIN PORT_IGNORE; do
+	eval PORT_ORIGIN=${PORT_ORIGIN}
+	if [ "$(echo ${PORT_ORIGIN} | colrm 2)" = "#" ]; then
+		continue
+	fi
+	if [ -n "${PORT_IGNORE}" ]; then
+		QUICK=
+		for PORT_QUIRK in $(echo ${PORT_IGNORE} | tr ',' ' '); do
+			if [ ${PORT_QUIRK} = ${PRODUCT_TARGET} -o \
+			     ${PORT_QUIRK} = ${PRODUCT_ARCH} -o \
+			     ${PORT_QUIRK} = ${PRODUCT_FLAVOUR} ]; then
+				continue 2
+			fi
+			if [ ${PORT_QUIRK} = "quick" ]; then
+				QUICK=1
+			fi
+		done
+		if [ -n "${PRODUCT_QUICK}" -a -z "${QUICK}" ]; then
+			# speed up build by skipping all annotations,
+			# our core should work without all of them.
+			continue
+		fi
+	fi
+	echo ${PORT_ORIGIN}
+done
+)
+else
+	PORTS_LIST=$(
+for PORT_ORIGIN in ${PORTS_LIST}; do
+	echo ${PORT_ORIGIN}
+done
+)
+fi
+
+check_packages ${SELF} ${@}
+
+git_branch ${SRCDIR} ${SRCBRANCH} SRCBRANCH
+git_branch ${PORTSDIR} ${PORTSBRANCH} PORTSBRANCH
 
 setup_stage ${STAGEDIR}
 setup_base ${STAGEDIR}
 setup_clone ${STAGEDIR} ${PORTSDIR}
 setup_clone ${STAGEDIR} ${SRCDIR}
 setup_chroot ${STAGEDIR}
+setup_distfiles ${STAGEDIR}
 
-# bootstrap the stage with the avilable set (minus opnsense and args)
-extract_packages ${STAGEDIR} opnsense ${@}
-install_packages ${STAGEDIR}
-clean_packages ${STAGEDIR}
+extract_packages ${STAGEDIR}
+remove_packages ${STAGEDIR} ${@} ${PRODUCT_CORES} ${PRODUCT_PLUGINS}
 
-echo ">>> Building packages..."
+for PKG in $(cd ${STAGEDIR}; find .${PACKAGESDIR}/All -type f); do
+	# all packages that install have their dependencies fulfilled
+	if pkg -c ${STAGEDIR} add ${PKG}; then
+		continue
+	fi
 
-MAKE_CONF="${PRODUCT_CONFIG}/make.conf"
+	# some packages clash in files with others, check for conflicts
+	PKGORIGIN=$(pkg -c ${STAGEDIR} info -F ${PKG} | grep ^Origin | awk '{ print $3; }')
+	PKGGLOBS=
+	for CONFLICTS in CONFLICTS CONFLICTS_INSTALL; do
+		PKGGLOBS="${PKGGLOBS} $(make -C ${PORTSDIR}/${PKGORIGIN} -V ${CONFLICTS})"
+	done
+	for PKGGLOB in ${PKGGLOBS}; do
+		pkg -c ${STAGEDIR} remove -gy "${PKGGLOB}" || true
+	done
+
+	# if the conflicts are resolved this works now, but remove
+	# the package again as it may clash again later...
+	if pkg -c ${STAGEDIR} add ${PKG}; then
+		pkg -c ${STAGEDIR} remove -y ${PKGORIGIN}
+		continue
+	fi
+
+	# if nothing worked, we are missing a dependency and force a rebuild
+	rm -f ${STAGEDIR}/${PKG}
+done
+
+pkg -c ${STAGEDIR} set -yaA1
+pkg -c ${STAGEDIR} autoremove -y
+
+MAKE_CONF="${CONFIGDIR}/make.conf"
 if [ -f ${MAKE_CONF} ]; then
 	cp ${MAKE_CONF} ${STAGEDIR}/etc/make.conf
 fi
 
+PORTS_LIST=$(echo ports-mgmt/pkg; echo "${PORTS_LIST}")
+
 # block SIGINT to allow for collecting port progress (use with care)
 trap : 2
 
-if ! chroot ${STAGEDIR} /bin/sh -es << EOF; then PORT_ABORT=1; fi
-# overwrites the ports tree variable, behaviour is unwanted...
-unset STAGEDIR
-# ...and this unbreaks the nmap build
-unset TARGET_ARCH
+if ! ${ENV_FILTER} chroot ${STAGEDIR} /bin/sh -es << EOF; then SELF=; fi
+echo "${PORTS_LIST}" | while read PORT_ORIGIN; do
+	FLAVOR=\${PORT_ORIGIN##*@}
+	PORT=\${PORT_ORIGIN%%@*}
+	MAKE_ARGS="
+PRODUCT_FLAVOUR=${PRODUCT_FLAVOUR}
+PRODUCT_PHP=${PRODUCT_PHP}
+PACKAGES=${PACKAGESDIR}
+UNAME_r=\$(freebsd-version)
+"
 
-if pkg -N; then
-	# no need to rebuild
-else
-	make -C ${PORTSDIR}/ports-mgmt/pkg rmconfig-recursive
-	make -C ${PORTSDIR}/ports-mgmt/pkg clean all install
-fi
+	if [ \${FLAVOR} != \${PORT} ]; then
+		MAKE_ARGS="\${MAKE_ARGS} FLAVOR=\${FLAVOR}"
+	fi
 
-echo "${PORT_LIST}" | { while read PORT_NAME PORT_CAT PORT_OPT; do
-	if [ "\$(echo \${PORT_NAME} | colrm 2)" = "#" -o "\${PORT_OPT}" = "sync" ]; then
+	# check whether the package has already been built
+	PKGFILE=\$(make -C ${PORTSDIR}/\${PORT} -V PKGFILE \${MAKE_ARGS})
+	if [ -f \${PKGFILE} ]; then
 		continue
 	fi
 
-	echo -n ">>> Building \${PORT_NAME}... "
-
-	if pkg query %n \${PORT_NAME} > /dev/null; then
-		# lock the package to keep build deps
-		pkg lock -qy \${PORT_NAME}
-		echo "skipped."
-		continue
+	# check whether the package is available as an older version
+	PKGNAME=\$(basename \${PKGFILE})
+	PKGNAME=\${PKGNAME%%-[0-9]*}.txz
+	PKGLINK=${PACKAGESDIR}/Latest/\${PKGNAME}
+	if [ -L \${PKGLINK} ]; then
+		PKGFILE=\$(readlink -f \${PKGLINK} || true)
+		if [ -f \${PKGFILE} ]; then
+			echo ">>> Ignored new version of \${PORT_ORIGIN}" >> /.pkg-warn
+			continue
+		fi
 	fi
 
-	# user configs linger somewhere else and override the override  :(
-	make -C ${PORTSDIR}/\${PORT_CAT}/\${PORT_NAME} rmconfig-recursive
-	make -C ${PORTSDIR}/\${PORT_CAT}/\${PORT_NAME} clean all install
+	make -s -C ${PORTSDIR}/\${PORT} install \
+	    USE_PACKAGE_DEPENDS=yes \${MAKE_ARGS}
 
-	if pkg query %n \${PORT_NAME} > /dev/null; then
-		# ok
-	else
-		echo "\${PORT_NAME}: package names don't match"
-		exit 1
-	fi
-done }
+	echo "${PORTS_LIST}" | while read PORT_DEPENDS; do
+		PORT_DEPNAME=\$(pkg query -e "%o == \${PORT_DEPENDS}" %n)
+		if [ -n "\${PORT_DEPNAME}" ]; then
+			pkg set -yA0 \${PORT_DEPNAME}
+		fi
+	done
+
+	pkg autoremove -y
+	for PKGNAME in \$(pkg query %n); do
+		pkg create -no ${PACKAGESDIR}/All \${PKGNAME}
+	done
+
+	make -s -C ${PORTSDIR}/\${PORT} clean \${MAKE_ARGS}
+
+	pkg set -yaA1
+	pkg set -yA0 ports-mgmt/pkg
+	pkg autoremove -y
+done
 EOF
 
 # unblock SIGINT
 trap - 2
 
-echo ">>> Creating binary packages..."
+bundle_packages ${STAGEDIR} "${SELF}" ports plugins core
 
-chroot ${STAGEDIR} /bin/sh -es << EOF && bundle_packages ${STAGEDIR}
-pkg autoremove -qy
-pkg create -ao ${PACKAGESDIR}/All -f txz
-EOF
+if [ -f ${STAGEDIR}/.pkg-warn ]; then
+	echo ">>> WARNING: The build may have integrity issues!"
+	cat ${STAGEDIR}/.pkg-warn
+fi
 
-if [ -n "${PORT_ABORT}" ]; then
+if [ "${SELF}" != "ports" ]; then
 	echo ">>> The ports build did not finish properly :("
 	exit 1
 fi

@@ -1,6 +1,6 @@
 #!/bin/sh
 
-# Copyright (c) 2014-2017 Franco Fichtner <franco@opnsense.org>
+# Copyright (c) 2014-2018 Franco Fichtner <franco@opnsense.org>
 #
 # Redistribution and use in source and binary forms, with or without
 # modification, are permitted provided that the following conditions
@@ -27,40 +27,39 @@
 
 set -e
 
-SELF=core
+SELF=test
 
 . ./common.sh
 
-check_packages ${SELF} ${@}
-
+git_branch ${PLUGINSDIR} ${PLUGINSBRANCH} PLUGINSBRANCH
 git_branch ${COREDIR} ${COREBRANCH} COREBRANCH
 
 setup_stage ${STAGEDIR}
 setup_base ${STAGEDIR}
+setup_clone ${STAGEDIR} ${COREDIR}
+setup_clone ${STAGEDIR} ${PLUGINSDIR}
 setup_chroot ${STAGEDIR}
 
 extract_packages ${STAGEDIR}
-remove_packages ${STAGEDIR} ${@}
-# register persistent packages to avoid bouncing
-install_packages ${STAGEDIR} pkg git
-lock_packages ${STAGEDIR}
+# XXX disable plugins, quagga and frr conflict, os-debug for tests
+install_packages ${STAGEDIR} ${PRODUCT_CORE} os-debug # ${PRODUCT_PLUGIN}
 
-for BRANCH in master ${COREBRANCH}; do
-	setup_copy ${STAGEDIR} ${COREDIR}
-	git_reset ${STAGEDIR}${COREDIR} ${BRANCH}
+echo ">>> Running packages test suite..."
+chroot ${STAGEDIR} /bin/sh -es <<EOF
+pkg check -da
+pkg check -sa
+EOF
 
-	CORE_ARGS="CORE_ARCH=${PRODUCT_ARCH} ${COREENV}"
+echo ">>> Running ${PLUGINSDIR} test suite..."
+chroot ${STAGEDIR} /bin/sh -es <<EOF
+make -C${PLUGINSDIR} lint
+make -C${PLUGINSDIR} style
+EOF
 
-	CORE_NAME=$(make -C ${STAGEDIR}${COREDIR} ${CORE_ARGS} name)
-	CORE_DEPS=$(make -C ${STAGEDIR}${COREDIR} ${CORE_ARGS} depends)
+echo ">>> Running ${COREDIR} test suite..."
 
-	if search_packages ${STAGEDIR} ${CORE_NAME}; then
-		# already built
-		continue
-	fi
-
-	install_packages ${STAGEDIR} ${CORE_DEPS}
-	custom_packages ${STAGEDIR} ${COREDIR} "${CORE_ARGS}"
-done
-
-bundle_packages ${STAGEDIR} ${SELF}
+chroot ${STAGEDIR} /bin/sh -es <<EOF
+make -C${COREDIR} lint
+make -C${COREDIR} style
+make -C${COREDIR} test
+EOF

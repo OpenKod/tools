@@ -1,6 +1,6 @@
 #!/bin/sh
 
-# Copyright (c) 2014-2017 Franco Fichtner <franco@opnsense.org>
+# Copyright (c) 2015-2018 Franco Fichtner <franco@opnsense.org>
 #
 # Redistribution and use in source and binary forms, with or without
 # modification, are permitted provided that the following conditions
@@ -27,13 +27,48 @@
 
 set -e
 
-SELF=core
+SELF=plugins
 
 . ./common.sh
 
+if [ -z "${PLUGINS_LIST}" ]; then
+	PLUGINS_LIST=$(
+cat ${CONFIGDIR}/plugins.conf | while read PLUGIN_ORIGIN PLUGIN_IGNORE; do
+	if [ "$(echo ${PLUGIN_ORIGIN} | colrm 2)" = "#" ]; then
+		continue
+	fi
+	if [ -n "${PLUGIN_IGNORE}" ]; then
+		QUICK=
+		for PLUGIN_QUIRK in $(echo ${PLUGIN_IGNORE} | tr ',' ' '); do
+			if [ ${PLUGIN_QUIRK} = ${PRODUCT_TARGET} -o \
+			     ${PLUGIN_QUIRK} = ${PRODUCT_ARCH} -o \
+			     ${PLUGIN_QUIRK} = ${PRODUCT_FLAVOUR} ]; then
+				continue 2
+			fi
+			if [ ${PLUGIN_QUIRK} = "quick" ]; then
+				QUICK=1
+			fi
+		done
+		if [ -n "${PRODUCT_QUICK}" -a -z "${QUICK}" ]; then
+			# speed up build by skipping all annotations,
+			# our core should work without all of them.
+			continue
+		fi
+	fi
+	echo ${PLUGIN_ORIGIN}
+done
+)
+else
+	PLUGINS_LIST=$(
+for PLUGIN_ORIGIN in ${PLUGINS_LIST}; do
+	echo ${PLUGIN_ORIGIN}
+done
+)
+fi
+
 check_packages ${SELF} ${@}
 
-git_branch ${COREDIR} ${COREBRANCH} COREBRANCH
+git_branch ${PLUGINSDIR} ${PLUGINSBRANCH} PLUGINSBRANCH
 
 setup_stage ${STAGEDIR}
 setup_base ${STAGEDIR}
@@ -41,26 +76,27 @@ setup_chroot ${STAGEDIR}
 
 extract_packages ${STAGEDIR}
 remove_packages ${STAGEDIR} ${@}
-# register persistent packages to avoid bouncing
 install_packages ${STAGEDIR} pkg git
 lock_packages ${STAGEDIR}
 
-for BRANCH in master ${COREBRANCH}; do
-	setup_copy ${STAGEDIR} ${COREDIR}
-	git_reset ${STAGEDIR}${COREDIR} ${BRANCH}
+for BRANCH in master ${PLUGINSBRANCH}; do
+	setup_copy ${STAGEDIR} ${PLUGINSDIR}
+	git_reset ${STAGEDIR}${PLUGINSDIR} ${BRANCH}
 
-	CORE_ARGS="CORE_ARCH=${PRODUCT_ARCH} ${COREENV}"
+	PLUGIN_ARGS="PLUGIN_ARCH=${PRODUCT_ARCH} ${PLUGINENV}"
 
-	CORE_NAME=$(make -C ${STAGEDIR}${COREDIR} ${CORE_ARGS} name)
-	CORE_DEPS=$(make -C ${STAGEDIR}${COREDIR} ${CORE_ARGS} depends)
+	for PLUGIN in ${PLUGINS_LIST}; do
+		PLUGIN_NAME=$(make -C ${STAGEDIR}${PLUGINSDIR}/${PLUGIN} ${PLUGIN_ARGS} name)
+		PLUGIN_DEPS=$(make -C ${STAGEDIR}${PLUGINSDIR}/${PLUGIN} ${PLUGIN_ARGS} depends)
 
-	if search_packages ${STAGEDIR} ${CORE_NAME}; then
-		# already built
-		continue
-	fi
+		if search_packages ${STAGEDIR} ${PLUGIN_NAME}; then
+			# already built
+			continue
+		fi
 
-	install_packages ${STAGEDIR} ${CORE_DEPS}
-	custom_packages ${STAGEDIR} ${COREDIR} "${CORE_ARGS}"
+		install_packages ${STAGEDIR} ${PLUGIN_DEPS}
+		custom_packages ${STAGEDIR} ${PLUGINSDIR}/${PLUGIN} "${PLUGIN_ARGS}"
+	done
 done
 
 bundle_packages ${STAGEDIR} ${SELF}

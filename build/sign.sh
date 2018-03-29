@@ -1,6 +1,6 @@
 #!/bin/sh
 
-# Copyright (c) 2014-2017 Franco Fichtner <franco@opnsense.org>
+# Copyright (c) 2016-2017 Franco Fichtner <franco@opnsense.org>
 #
 # Redistribution and use in source and binary forms, with or without
 # modification, are permitted provided that the following conditions
@@ -27,40 +27,24 @@
 
 set -e
 
-SELF=core
+SELF=sign
 
 . ./common.sh
 
-check_packages ${SELF} ${@}
+BASE_SET=$(find ${SETSDIR} -name "base-*-${PRODUCT_ARCH}.txz")
+if [ -f "${BASE_SET}" ]; then
+	generate_signature ${BASE_SET}
+	generate_signature ${BASE_SET%%.txz}.obsolete
+fi
 
-git_branch ${COREDIR} ${COREBRANCH} COREBRANCH
+KERNEL_SET=$(find ${SETSDIR} -name "kernel-*-${PRODUCT_ARCH}.txz")
+if [ -f "${KERNEL_SET}" ]; then
+	generate_signature ${KERNEL_SET}
+fi
 
-setup_stage ${STAGEDIR}
-setup_base ${STAGEDIR}
-setup_chroot ${STAGEDIR}
-
-extract_packages ${STAGEDIR}
-remove_packages ${STAGEDIR} ${@}
-# register persistent packages to avoid bouncing
-install_packages ${STAGEDIR} pkg git
-lock_packages ${STAGEDIR}
-
-for BRANCH in master ${COREBRANCH}; do
-	setup_copy ${STAGEDIR} ${COREDIR}
-	git_reset ${STAGEDIR}${COREDIR} ${BRANCH}
-
-	CORE_ARGS="CORE_ARCH=${PRODUCT_ARCH} ${COREENV}"
-
-	CORE_NAME=$(make -C ${STAGEDIR}${COREDIR} ${CORE_ARGS} name)
-	CORE_DEPS=$(make -C ${STAGEDIR}${COREDIR} ${CORE_ARGS} depends)
-
-	if search_packages ${STAGEDIR} ${CORE_NAME}; then
-		# already built
-		continue
-	fi
-
-	install_packages ${STAGEDIR} ${CORE_DEPS}
-	custom_packages ${STAGEDIR} ${COREDIR} "${CORE_ARGS}"
-done
-
-bundle_packages ${STAGEDIR} ${SELF}
+PKGS_SET=$(find ${SETSDIR} -name "packages-*-${PRODUCT_FLAVOUR}-${PRODUCT_ARCH}.tar")
+if [ -f "${PKGS_SET}" ]; then
+	setup_stage ${STAGEDIR}
+	extract_packages ${STAGEDIR}
+	bundle_packages ${STAGEDIR} ${SELF}
+fi

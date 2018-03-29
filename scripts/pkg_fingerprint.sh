@@ -1,6 +1,8 @@
 #!/bin/sh
 
-if [ -f /root/repo.pub ]; then
+PUBKEY=${1}
+
+if [ -n "${PUBKEY}" -a -f "${PUBKEY}" ]; then
 	echo "function: \"sha256\""
-	echo "fingerprint: \"$(sha256 -q /root/repo.pub)\""
+	echo "fingerprint: \"$(sha256 -q ${PUBKEY})\""
 fi

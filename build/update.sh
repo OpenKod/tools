@@ -1,6 +1,6 @@
 #!/bin/sh
 
-# Copyright (c) 2015 Franco Fichtner <franco@opnsense.org>
+# Copyright (c) 2017 Franco Fichtner <franco@opnsense.org>
 #
 # Redistribution and use in source and binary forms, with or without
 # modification, are permitted provided that the following conditions
@@ -27,22 +27,57 @@
 
 set -e
 
-if [ ${#} -lt 2 ]; then
-	echo "Usage: ${0} old.txz new.txz [old.obsolete]"
-	exit 1
+SELF=update
+
+. ./common.sh
+
+ARGS=${@}
+if [ -z "${ARGS}" ]; then
+	ARGS="core plugins ports src tools"
 fi
 
-tar -tf ${1} | sed -e 's/^\.//g' -e '/\/$/d' | sort > /tmp/setdiff.old.${$}
-tar -tf ${2} | sed -e 's/^\.//g' -e '/\/$/d' | sort > /tmp/setdiff.new.${$}
+for ARG in ${ARGS}; do
+	case ${ARG} in
+	core)
+		BRANCHES=${COREBRANCH}
+		DIR=${COREDIR}
+		if [ ${BRANCHES} != master ]; then
+			BRANCHES="master ${BRANCHES}"
+		fi
+		;;
+	plugins)
+		BRANCHES=${PLUGINSBRANCH}
+		DIR=${PLUGINSDIR}
+		if [ ${BRANCHES} != master ]; then
+			BRANCHES="master ${BRANCHES}"
+		fi
+		;;
+	ports)
+		BRANCHES=${PORTSBRANCH}
+		DIR=${PORTSDIR}
+		;;
+	portsref)
+		# XXX needs GITBASE=https://github.com/hardenedbsd
+		BRANCHES=${PORTSREFBRANCH}
+		DIR=${PORTSREFDIR}
+		ACCOUNT=hardenedbsd
+		;;
+	src)
+		BRANCHES=${SRCBRANCH}
+		DIR=${SRCDIR}
+		;;
+	tools)
+		BRANCHES=${TOOLSBRANCH}
+		DIR=${TOOLSDIR}
+		;;
+	*)
+		continue
+		;;
+	esac
 
-: > /tmp/setdiff.tmp.${$}
-if [ -n "${3}" ]; then
-	# reinstated files need to be removed from old.obsolete
-	diff -u ${3} /tmp/setdiff.new.${$} | grep '^-/' | \
-	    cut -b 2- > /tmp/setdiff.tmp.${$}
-fi
-
-(cat /tmp/setdiff.tmp.${$}; diff -u /tmp/setdiff.old.${$} \
-    /tmp/setdiff.new.${$} | grep '^-/' | cut -b 2-) | sort -u
-
-rm -f /tmp/setdiff.*
+	git_clone ${DIR}
+	git_fetch ${DIR}
+	for BRANCH in ${BRANCHES}; do
+		git_pull ${DIR} ${BRANCH}
+	done
+done

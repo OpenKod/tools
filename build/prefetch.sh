@@ -1,6 +1,6 @@
 #!/bin/sh
 
-# Copyright (c) 2014-2017 Franco Fichtner <franco@opnsense.org>
+# Copyright (c) 2016-2017 Franco Fichtner <franco@opnsense.org>
 #
 # Redistribution and use in source and binary forms, with or without
 # modification, are permitted provided that the following conditions
@@ -27,40 +27,35 @@
 
 set -e
 
-SELF=core
+SELF=prefetch
 
 . ./common.sh
 
-check_packages ${SELF} ${@}
+# XXX does not adapt to FreeBSD version used
+ABI="FreeBSD:11:${PRODUCT_ARCH}/${PRODUCT_SETTINGS}"
 
-git_branch ${COREDIR} ${COREBRANCH} COREBRANCH
-
-setup_stage ${STAGEDIR}
-setup_base ${STAGEDIR}
-setup_chroot ${STAGEDIR}
-
-extract_packages ${STAGEDIR}
-remove_packages ${STAGEDIR} ${@}
-# register persistent packages to avoid bouncing
-install_packages ${STAGEDIR} pkg git
-lock_packages ${STAGEDIR}
-
-for BRANCH in master ${COREBRANCH}; do
-	setup_copy ${STAGEDIR} ${COREDIR}
-	git_reset ${STAGEDIR}${COREDIR} ${BRANCH}
-
-	CORE_ARGS="CORE_ARCH=${PRODUCT_ARCH} ${COREENV}"
-
-	CORE_NAME=$(make -C ${STAGEDIR}${COREDIR} ${CORE_ARGS} name)
-	CORE_DEPS=$(make -C ${STAGEDIR}${COREDIR} ${CORE_ARGS} depends)
-
-	if search_packages ${STAGEDIR} ${CORE_NAME}; then
-		# already built
-		continue
-	fi
-
-	install_packages ${STAGEDIR} ${CORE_DEPS}
-	custom_packages ${STAGEDIR} ${COREDIR} "${CORE_ARGS}"
+for ARG in ${@}; do
+	case ${ARG} in
+	base)
+		sh ./clean.sh ${ARG}
+		URL="${PRODUCT_MIRROR}/${ABI}/sets/${ARG}-${PRODUCT_VERSION}-${PRODUCT_ARCH}"
+		for SUFFIX in obsolete.sig obsolete txz.sig txz; do
+			fetch -o ${SETSDIR} ${URL}.${SUFFIX} || true
+		done
+		;;
+	kernel|kernel-dbg)
+		sh ./clean.sh kernel
+		URL="${PRODUCT_MIRROR}/${ABI}/sets/${ARG}-${PRODUCT_VERSION}-${PRODUCT_ARCH}"
+		for SUFFIX in txz.sig txz; do
+			fetch -o ${SETSDIR} ${URL}.${SUFFIX} || true
+		done
+		;;
+	packages)
+		sh ./clean.sh ${ARG}
+		URL="${PRODUCT_MIRROR}/${ABI}/sets/${ARG}-${PRODUCT_VERSION}-${PRODUCT_FLAVOUR}-${PRODUCT_ARCH}"
+		for SUFFIX in tar.sig tar; do
+			fetch -o ${SETSDIR} ${URL}.${SUFFIX} || true
+		done
+		;;
+	esac
 done
-
-bundle_packages ${STAGEDIR} ${SELF}

@@ -1,7 +1,6 @@
 #!/bin/sh
 
-# Copyright (c) 2010-2011 Scott Ullrich <sullrich@gmail.com>
-# Copyright (c) 2014-2015 Franco Fichtner <franco@opnsense.org>
+# Copyright (c) 2016-2017 Franco Fichtner <franco@opnsense.org>
 #
 # Redistribution and use in source and binary forms, with or without
 # modification, are permitted provided that the following conditions
@@ -28,50 +27,26 @@
 
 set -e
 
-. ./common.sh && $(${SCRUB_ARGS})
+SELF=info
 
-# rewrite the disk label, because we're install media
-LABEL="${LABEL}_Install"
+. ./common.sh
 
-setup_stage ${STAGEDIR}
-setup_base ${STAGEDIR}
-setup_kernel ${STAGEDIR}
-setup_packages ${STAGEDIR} opnsense
-setup_mtree ${STAGEDIR}
+TAGNAME=
+if [ -n "${1}" ]; then
+	TAGNAME=${1}
+fi
 
-echo ">>> Building memstick image(s)..."
-
-cat > ${STAGEDIR}/etc/fstab << EOF
-# Device	Mountpoint	FStype	Options	Dump	Pass#
-/dev/ufs/${LABEL}	/	ufs	ro,noatime	1	1
-tmpfs		/tmp		tmpfs	rw,mode=01777	0	0
-EOF
-
-makefs -t ffs -B little -o label=${LABEL} ${VGAIMG} ${STAGEDIR}
-
-echo "-S115200 -P" > ${STAGEDIR}/boot.config
-
-sed -i '' -e 's:</system>:<enableserial/></system>:' \
-    ${STAGEDIR}${CONFIG_XML}
-
-sed -i '' -Ee 's:^ttyu0:ttyu0	"/usr/libexec/getty std.9600"	cons25	on  secure:' ${STAGEDIR}/etc/ttys
-
-makefs -t ffs -B little -o label=${LABEL} ${SERIALIMG} ${STAGEDIR}
-
-setup_bootcode()
+info()
 {
-	local dev
+	git_describe ${2} ${TAGNAME}
 
-	dev=$(mdconfig -a -t vnode -f "${1}")
-	gpart create -s BSD "${dev}"
-	gpart bootcode -b "${STAGEDIR}"/boot/boot "${dev}"
-	gpart add -t freebsd-ufs "${dev}"
-	mdconfig -d -u "${dev}"
+	cat << EOF
+${1} ${2} ${REPO_VERSION} ${REPO_COMMENT} ${REPO_BRANCH}
+EOF
 }
 
-setup_bootcode ${VGAIMG}
-setup_bootcode ${SERIALIMG}
-
-echo "done:"
-
-ls -lah ${IMAGESDIR}/*
+info tools ${TOOLSDIR}
+info src ${SRCDIR}
+info ports ${PORTSDIR}
+info plugins ${PLUGINSDIR}
+info core ${COREDIR}

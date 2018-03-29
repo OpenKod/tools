@@ -1,6 +1,6 @@
 #!/bin/sh
 
-# Copyright (c) 2014-2017 Franco Fichtner <franco@opnsense.org>
+# Copyright (c) 2016-2017 Franco Fichtner <franco@opnsense.org>
 #
 # Redistribution and use in source and binary forms, with or without
 # modification, are permitted provided that the following conditions
@@ -27,40 +27,25 @@
 
 set -e
 
-SELF=core
+SELF=verify
 
 . ./common.sh
-
-check_packages ${SELF} ${@}
-
-git_branch ${COREDIR} ${COREBRANCH} COREBRANCH
 
 setup_stage ${STAGEDIR}
 setup_base ${STAGEDIR}
 setup_chroot ${STAGEDIR}
 
 extract_packages ${STAGEDIR}
-remove_packages ${STAGEDIR} ${@}
-# register persistent packages to avoid bouncing
-install_packages ${STAGEDIR} pkg git
-lock_packages ${STAGEDIR}
+install_packages ${STAGEDIR} ${PRODUCT_CORE}
 
-for BRANCH in master ${COREBRANCH}; do
-	setup_copy ${STAGEDIR} ${COREDIR}
-	git_reset ${STAGEDIR}${COREDIR} ${BRANCH}
+mkdir -p ${STAGEDIR}${SETSDIR}
+cp ${SETSDIR}/* ${STAGEDIR}${SETSDIR}
 
-	CORE_ARGS="CORE_ARCH=${PRODUCT_ARCH} ${COREENV}"
-
-	CORE_NAME=$(make -C ${STAGEDIR}${COREDIR} ${CORE_ARGS} name)
-	CORE_DEPS=$(make -C ${STAGEDIR}${COREDIR} ${CORE_ARGS} depends)
-
-	if search_packages ${STAGEDIR} ${CORE_NAME}; then
-		# already built
-		continue
-	fi
-
-	install_packages ${STAGEDIR} ${CORE_DEPS}
-	custom_packages ${STAGEDIR} ${COREDIR} "${CORE_ARGS}"
+chroot ${STAGEDIR} /bin/sh -es <<EOF
+for DIR in ${PACKAGESDIR}/Latest ${SETSDIR}; do
+	for FILE in \$(find \${DIR} -name "*.sig"); do
+		echo ">>> Verifying \${FILE%%.sig}:"
+		opnsense-verify \${FILE%%.sig}
+	done
 done
-
-bundle_packages ${STAGEDIR} ${SELF}
+EOF

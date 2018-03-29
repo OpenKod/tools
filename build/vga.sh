@@ -27,40 +27,41 @@
 
 set -e
 
-SELF=core
+SELF=vga
 
 . ./common.sh
 
-check_packages ${SELF} ${@}
+check_image ${SELF} ${@}
 
-git_branch ${COREDIR} ${COREBRANCH} COREBRANCH
+VGAIMG="${IMAGESDIR}/${PRODUCT_RELEASE}-vga-${PRODUCT_ARCH}.img"
+VGALABEL="${PRODUCT_NAME}_Install"
 
-setup_stage ${STAGEDIR}
-setup_base ${STAGEDIR}
-setup_chroot ${STAGEDIR}
+sh ./clean.sh ${SELF}
 
-extract_packages ${STAGEDIR}
-remove_packages ${STAGEDIR} ${@}
-# register persistent packages to avoid bouncing
-install_packages ${STAGEDIR} pkg git
-lock_packages ${STAGEDIR}
+setup_stage ${STAGEDIR} work
+setup_base ${STAGEDIR}/work
+setup_kernel ${STAGEDIR}/work
+setup_packages ${STAGEDIR}/work
+setup_extras ${STAGEDIR}/work ${SELF}
+setup_mtree ${STAGEDIR}/work
+setup_entropy ${STAGEDIR}/work
 
-for BRANCH in master ${COREBRANCH}; do
-	setup_copy ${STAGEDIR} ${COREDIR}
-	git_reset ${STAGEDIR}${COREDIR} ${BRANCH}
+cat > ${STAGEDIR}/work/etc/fstab << EOF
+# Device		Mountpoint	FStype	Options		Dump	Pass#
+/dev/ufs/${VGALABEL}	/		ufs	ro,noatime	1	1
+tmpfs			/tmp		tmpfs	rw,mode=01777	0	0
+EOF
 
-	CORE_ARGS="CORE_ARCH=${PRODUCT_ARCH} ${COREENV}"
+makefs -B little -o label=${VGALABEL} ${STAGEDIR}/root.part ${STAGEDIR}/work
 
-	CORE_NAME=$(make -C ${STAGEDIR}${COREDIR} ${CORE_ARGS} name)
-	CORE_DEPS=$(make -C ${STAGEDIR}${COREDIR} ${CORE_ARGS} depends)
+UEFIBOOT=
+GPTDUMMY=
 
-	if search_packages ${STAGEDIR} ${CORE_NAME}; then
-		# already built
-		continue
-	fi
+if [ ${PRODUCT_ARCH} = "amd64" -a -n "${PRODUCT_UEFI}" ]; then
+	UEFIBOOT="-p efi:=${STAGEDIR}/work/boot/boot1.efifat"
+	GPTDUMMY="-p freebsd-swap::512k"
+fi
 
-	install_packages ${STAGEDIR} ${CORE_DEPS}
-	custom_packages ${STAGEDIR} ${COREDIR} "${CORE_ARGS}"
-done
-
-bundle_packages ${STAGEDIR} ${SELF}
+mkimg -s gpt -o ${VGAIMG} -b ${STAGEDIR}/work/boot/pmbr ${UEFIBOOT} \
+    -p freebsd-boot:=${STAGEDIR}/work/boot/gptboot ${GPTDUMMY} \
+    -p freebsd-ufs:=${STAGEDIR}/root.part

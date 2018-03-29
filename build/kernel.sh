@@ -1,6 +1,6 @@
 #!/bin/sh
 
-# Copyright (c) 2014-2015 Franco Fichtner <franco@opnsense.org>
+# Copyright (c) 2014-2017 Franco Fichtner <franco@opnsense.org>
 #
 # Redistribution and use in source and binary forms, with or without
 # modification, are permitted provided that the following conditions
@@ -27,22 +27,62 @@
 
 set -e
 
-. ./common.sh && $(${SCRUB_ARGS})
+SELF=kernel
 
-sh ./clean.sh kernel
+. ./common.sh
 
-git_clear ${SRCDIR}
+KERNEL_SET=$(find ${SETSDIR} -name "kernel-*-${PRODUCT_ARCH}.txz")
+
+if [ -f "${KERNEL_SET}" -a -z "${1}" ]; then
+	echo ">>> Reusing kernel set: ${KERNEL_SET}"
+	exit 0
+fi
+
+git_branch ${SRCDIR} ${SRCBRANCH} SRCBRANCH
 git_describe ${SRCDIR}
 
-BUILD_KERNEL="SMP"
+KERNEL_DEBUG_SET=${SETSDIR}/kernel-dbg-${REPO_VERSION}-${PRODUCT_ARCH}.txz
+KERNEL_RELEASE_SET=${SETSDIR}/kernel-${REPO_VERSION}-${PRODUCT_ARCH}.txz
 
-# XXX move config to src.git
-cp ${PRODUCT_CONFIG}/${BUILD_KERNEL} ${SRCDIR}/sys/${ARCH}/conf/${BUILD_KERNEL}
+if [ -f ${CONFIGDIR}/${PRODUCT_KERNEL} ]; then
+	cp "${CONFIGDIR}/${PRODUCT_KERNEL}" \
+	    "${SRCDIR}/sys/${PRODUCT_TARGET}/conf/${PRODUCT_KERNEL}"
+fi
 
-MAKEARGS="TARGET_ARCH=${ARCH} KERNCONF=${BUILD_KERNEL}"
+MAKE_ARGS="
+TARGET_ARCH=${PRODUCT_ARCH}
+TARGET=${PRODUCT_TARGET}
+KERNCONF=${PRODUCT_KERNEL}
+SRCCONF=${CONFIGDIR}/src.conf
+__MAKE_CONF=
+"
 
-make -C${SRCDIR} -j${CPUS} buildkernel ${MAKEARGS} NO_KERNELCLEAN=yes
-make -C${SRCDIR}/release obj ${MAKEARGS}
-make -C${SRCDIR}/release kernel.txz ${MAKEARGS}
+${ENV_FILTER} make -s -C${SRCDIR} -j${CPUS} buildkernel ${MAKE_ARGS} NO_KERNELCLEAN=yes
+${ENV_FILTER} make -s -C${SRCDIR}/release obj ${MAKE_ARGS}
 
-mv $(make -C${SRCDIR}/release -V .OBJDIR)/kernel.txz ${SETSDIR}/kernel-${REPO_VERSION}-${ARCH}.txz
+build_marker kernel
+
+KERNEL_OBJ=$(make -C${SRCDIR}/release -V .OBJDIR)/kernel.txz
+DEBUG_OBJ=$(make -C${SRCDIR}/release -V .OBJDIR)/kernel-dbg.txz
+
+rm -f ${KERNEL_OBJ} ${DEBUG_OBJ}
+${ENV_FILTER} make -s -C${SRCDIR}/release kernel.txz ${MAKE_ARGS}
+
+sh ./clean.sh ${SELF}
+
+if [ -z "$(tar -tf ${DEBUG_OBJ})" ]; then
+	echo -n ">>> Copying release kernel set... "
+	mv ${KERNEL_OBJ} ${KERNEL_RELEASE_SET}
+	echo "done"
+	KERNEL_SET=${KERNEL_RELEASE_SET}
+else
+	setup_stage ${STAGEDIR}
+	echo ">>> Generating debug kernel set:"
+	tar -C ${STAGEDIR} -xjf ${KERNEL_OBJ}
+	tar -C ${STAGEDIR} -xjf ${DEBUG_OBJ}
+	tar -C ${STAGEDIR} -cvf - . | xz > ${KERNEL_DEBUG_SET}
+	KERNEL_SET=${KERNEL_DEBUG_SET}
+fi
+
+rm -f ${KERNEL_OBJ} ${DEBUG_OBJ}
+generate_signature ${KERNEL_SET}

@@ -1,6 +1,6 @@
 #!/bin/sh
 
-# Copyright (c) 2014-2017 Franco Fichtner <franco@opnsense.org>
+# Copyright (c) 2016-2107 Franco Fichtner <franco@opnsense.org>
 #
 # Redistribution and use in source and binary forms, with or without
 # modification, are permitted provided that the following conditions
@@ -27,40 +27,25 @@
 
 set -e
 
-SELF=core
+SELF=boot
 
 . ./common.sh
 
-check_packages ${SELF} ${@}
+if [ -z "${1}" ]; then
+	echo ">> No image given."
+	exit 0
+fi
 
-git_branch ${COREDIR} ${COREBRANCH} COREBRANCH
+IMAGE=$(find ${IMAGESDIR} -name "*-${1}-${PRODUCT_ARCH}.*")
 
-setup_stage ${STAGEDIR}
-setup_base ${STAGEDIR}
-setup_chroot ${STAGEDIR}
+echo ">>> Booting image ${IMAGE}..."
 
-extract_packages ${STAGEDIR}
-remove_packages ${STAGEDIR} ${@}
-# register persistent packages to avoid bouncing
-install_packages ${STAGEDIR} pkg git
-lock_packages ${STAGEDIR}
-
-for BRANCH in master ${COREBRANCH}; do
-	setup_copy ${STAGEDIR} ${COREDIR}
-	git_reset ${STAGEDIR}${COREDIR} ${BRANCH}
-
-	CORE_ARGS="CORE_ARCH=${PRODUCT_ARCH} ${COREENV}"
-
-	CORE_NAME=$(make -C ${STAGEDIR}${COREDIR} ${CORE_ARGS} name)
-	CORE_DEPS=$(make -C ${STAGEDIR}${COREDIR} ${CORE_ARGS} depends)
-
-	if search_packages ${STAGEDIR} ${CORE_NAME}; then
-		# already built
-		continue
-	fi
-
-	install_packages ${STAGEDIR} ${CORE_DEPS}
-	custom_packages ${STAGEDIR} ${COREDIR} "${CORE_ARGS}"
-done
-
-bundle_packages ${STAGEDIR} ${SELF}
+kldstat -qm vmm || kldload vmm
+bhyveload -m 512 -d ${IMAGE} vm0
+bhyve -c 1 -m 512 -AHP \
+    -s 0:0,hostbridge \
+    -s 1:0,virtio-net,tap0 \
+    -s 2:0,ahci-hd,${IMAGE} \
+    -s 31,lpc -l com1,stdio \
+    vm0 || true
+bhyvectl --destroy --vm=vm0

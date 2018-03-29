@@ -1,6 +1,6 @@
 #!/bin/sh
 
-# Copyright (c) 2014 Franco Fichtner <franco@opnsense.org>
+# Copyright (c) 2018 Franco Fichtner <franco@opnsense.org>
 #
 # Redistribution and use in source and binary forms, with or without
 # modification, are permitted provided that the following conditions
@@ -27,23 +27,26 @@
 
 set -e
 
-. ./common.sh && $(${SCRUB_ARGS})
+SELF=upload
 
-git_clear ${COREDIR}
+. ./common.sh
 
-setup_stage ${STAGEDIR}
-setup_base ${STAGEDIR}
-setup_clone ${STAGEDIR} ${COREDIR}
-setup_chroot ${STAGEDIR}
+upload()
+{
+	echo ">>> Uploading ${1} to ${PRODUCT_SERVER}..."
+	(cd ${2}; scp ${3} ${PRODUCT_SERVER}:)
+}
 
-extract_packages ${STAGEDIR}
-install_packages ${STAGEDIR} opnsense pear-PHP_CodeSniffer
-
-echo ">>> Running ${COREDIR} test suite..."
-
-chroot ${STAGEDIR} /bin/sh -es <<EOF
-make -C${COREDIR} setup
-make -C${COREDIR} lint
-make -C${COREDIR} health
-make -C${COREDIR} style
-EOF
+for ARG in ${@}; do
+	case ${ARG} in
+	arm|dvd|nano|serial|vga|vm)
+		upload ${ARG} ${IMAGESDIR} "*-${PRODUCT_FLAVOUR}-${ARG}-*"
+		;;
+	base|kernel)
+		upload ${ARG} ${SETSDIR} "${ARG}-*"
+		;;
+	packages|release)
+		upload ${ARG} ${SETSDIR} "${ARG}-*-${PRODUCT_FLAVOUR}-*"
+		;;
+	esac
+done

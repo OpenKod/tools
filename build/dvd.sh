@@ -27,40 +27,51 @@
 
 set -e
 
-SELF=core
+SELF=dvd
 
 . ./common.sh
 
-check_packages ${SELF} ${@}
+check_image ${SELF} ${@}
 
-git_branch ${COREDIR} ${COREBRANCH} COREBRANCH
+DVDIMAGE="${IMAGESDIR}/${PRODUCT_RELEASE}-dvd-${PRODUCT_ARCH}.iso"
+DVDLABEL=$(echo "${PRODUCT_NAME}_Install" | tr '[:lower:]' '[:upper:]')
 
-setup_stage ${STAGEDIR}
-setup_base ${STAGEDIR}
-setup_chroot ${STAGEDIR}
+sh ./clean.sh ${SELF}
 
-extract_packages ${STAGEDIR}
-remove_packages ${STAGEDIR} ${@}
-# register persistent packages to avoid bouncing
-install_packages ${STAGEDIR} pkg git
-lock_packages ${STAGEDIR}
+setup_stage ${STAGEDIR} work mnt
+setup_base ${STAGEDIR}/work
+setup_kernel ${STAGEDIR}/work
+setup_packages ${STAGEDIR}/work
+setup_extras ${STAGEDIR}/work ${SELF}
+setup_mtree ${STAGEDIR}/work
+setup_entropy ${STAGEDIR}/work
 
-for BRANCH in master ${COREBRANCH}; do
-	setup_copy ${STAGEDIR} ${COREDIR}
-	git_reset ${STAGEDIR}${COREDIR} ${BRANCH}
+UEFIBOOT=
+if [ ${PRODUCT_ARCH} = "amd64" -a -n "${PRODUCT_UEFI}" ]; then
+	dd if=/dev/zero of=${STAGEDIR}/efiboot.img bs=4k count=200
+	DEV=$(mdconfig -a -t vnode -f ${STAGEDIR}/efiboot.img)
+	newfs_msdos -F 12 -m 0xf8 /dev/${DEV}
+	mount -t msdosfs /dev/${DEV} ${STAGEDIR}/mnt
+	mkdir -p ${STAGEDIR}/mnt/efi/boot
+	cp ${STAGEDIR}/work/boot/loader.efi \
+	    ${STAGEDIR}/mnt/efi/boot/bootx64.efi
+	umount ${STAGEDIR}/mnt
+	mdconfig -d -u ${DEV}
 
-	CORE_ARGS="CORE_ARCH=${PRODUCT_ARCH} ${COREENV}"
+	UEFIBOOT="-o bootimage=i386;${STAGEDIR}/efiboot.img"
+	UEFIBOOT="${UEFIBOOT} -o no-emul-boot"
+fi
 
-	CORE_NAME=$(make -C ${STAGEDIR}${COREDIR} ${CORE_ARGS} name)
-	CORE_DEPS=$(make -C ${STAGEDIR}${COREDIR} ${CORE_ARGS} depends)
+echo -n ">>> Building dvd image... "
 
-	if search_packages ${STAGEDIR} ${CORE_NAME}; then
-		# already built
-		continue
-	fi
+cat > ${STAGEDIR}/work/etc/fstab << EOF
+# Device	Mountpoint	FStype	Options	Dump	Pass #
+/dev/iso9660/${DVDLABEL}	/	cd9660	ro	0	0
+tmpfs		/tmp		tmpfs	rw,mode=01777	0	0
+EOF
 
-	install_packages ${STAGEDIR} ${CORE_DEPS}
-	custom_packages ${STAGEDIR} ${COREDIR} "${CORE_ARGS}"
-done
+makefs -t cd9660 ${UEFIBOOT} \
+    -o 'bootimage=i386;'"${STAGEDIR}"'/work/boot/cdboot' -o no-emul-boot \
+    -o label=${DVDLABEL} -o rockridge ${DVDIMAGE} ${STAGEDIR}/work
 
-bundle_packages ${STAGEDIR} ${SELF}
+echo "done"

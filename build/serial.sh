@@ -1,6 +1,7 @@
 #!/bin/sh
 
 # Copyright (c) 2014-2017 Franco Fichtner <franco@opnsense.org>
+# Copyright (c) 2010-2011 Scott Ullrich <sullrich@gmail.com>
 #
 # Redistribution and use in source and binary forms, with or without
 # modification, are permitted provided that the following conditions
@@ -27,40 +28,35 @@
 
 set -e
 
-SELF=core
+SELF=serial
 
 . ./common.sh
 
-check_packages ${SELF} ${@}
+check_image ${SELF} ${@}
 
-git_branch ${COREDIR} ${COREBRANCH} COREBRANCH
+SERIALIMG="${IMAGESDIR}/${PRODUCT_RELEASE}-serial-${PRODUCT_ARCH}.img"
+SERIALLABEL="${PRODUCT_NAME}_Install"
+
+sh ./clean.sh ${SELF}
 
 setup_stage ${STAGEDIR}
 setup_base ${STAGEDIR}
-setup_chroot ${STAGEDIR}
+setup_kernel ${STAGEDIR}
+setup_packages ${STAGEDIR}
+setup_extras ${STAGEDIR} ${SELF}
+setup_mtree ${STAGEDIR}
+setup_entropy ${STAGEDIR}
 
-extract_packages ${STAGEDIR}
-remove_packages ${STAGEDIR} ${@}
-# register persistent packages to avoid bouncing
-install_packages ${STAGEDIR} pkg git
-lock_packages ${STAGEDIR}
+cat > ${STAGEDIR}/etc/fstab << EOF
+# Device		Mountpoint	FStype	Options		Dump	Pass#
+/dev/ufs/${SERIALLABEL}	/		ufs	ro,noatime	1	1
+tmpfs			/tmp		tmpfs	rw,mode=01777	0	0
+EOF
 
-for BRANCH in master ${COREBRANCH}; do
-	setup_copy ${STAGEDIR} ${COREDIR}
-	git_reset ${STAGEDIR}${COREDIR} ${BRANCH}
+makefs -t ffs -B little -o label=${SERIALLABEL} ${SERIALIMG} ${STAGEDIR}
 
-	CORE_ARGS="CORE_ARCH=${PRODUCT_ARCH} ${COREENV}"
-
-	CORE_NAME=$(make -C ${STAGEDIR}${COREDIR} ${CORE_ARGS} name)
-	CORE_DEPS=$(make -C ${STAGEDIR}${COREDIR} ${CORE_ARGS} depends)
-
-	if search_packages ${STAGEDIR} ${CORE_NAME}; then
-		# already built
-		continue
-	fi
-
-	install_packages ${STAGEDIR} ${CORE_DEPS}
-	custom_packages ${STAGEDIR} ${COREDIR} "${CORE_ARGS}"
-done
-
-bundle_packages ${STAGEDIR} ${SELF}
+DEV=$(mdconfig -a -t vnode -f ${SERIALIMG})
+gpart create -s BSD ${DEV}
+gpart bootcode -b ${STAGEDIR}/boot/boot ${DEV}
+gpart add -t freebsd-ufs ${DEV}
+mdconfig -d -u ${DEV}

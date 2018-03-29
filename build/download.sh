@@ -1,6 +1,6 @@
 #!/bin/sh
 
-# Copyright (c) 2014-2015 Franco Fichtner <franco@opnsense.org>
+# Copyright (c) 2018 Franco Fichtner <franco@opnsense.org>
 #
 # Redistribution and use in source and binary forms, with or without
 # modification, are permitted provided that the following conditions
@@ -27,31 +27,33 @@
 
 set -e
 
-. ./common.sh && $(${SCRUB_ARGS})
+SELF=download
 
-# rewrite the disk label, because we're install media
-LABEL="${LABEL}_Install"
+. ./common.sh
 
-setup_stage ${STAGEDIR}
-setup_base ${STAGEDIR}
-setup_kernel ${STAGEDIR}
-setup_packages ${STAGEDIR} opnsense
-setup_mtree ${STAGEDIR}
+download()
+{
+	echo ">>> Downloading ${1} from ${PRODUCT_SERVER}..."
+	scp ${PRODUCT_SERVER}:"${2}/${3}" ${2}
+}
 
-echo -n ">>> Building ISO image... "
-
-# must be upper case:
-LABEL=$(echo ${LABEL} | tr '[:lower:]' '[:upper:]')
-
-cat > ${STAGEDIR}/etc/fstab << EOF
-# Device	Mountpoint	FStype	Options	Dump	Pass #
-/dev/iso9660/${LABEL}	/	cd9660	ro	0	0
-tmpfs		/tmp		tmpfs	rw,mode=01777	0	0
-EOF
-
-makefs -t cd9660 -o bootimage="i386;${STAGEDIR}/boot/cdboot" \
-    -o no-emul-boot -o label=${LABEL} -o rockridge ${CDROM} ${STAGEDIR}
-
-echo "done:"
-
-ls -lah ${IMAGESDIR}/*
+for ARG in ${@}; do
+	case ${ARG} in
+	arm|dvd|nano|serial|vga|vm)
+		sh ./clean.sh ${ARG}
+		download ${ARG} ${IMAGESDIR} "*-${PRODUCT_FLAVOUR}-${ARG}-*"
+		;;
+	base|kernel)
+		sh ./clean.sh ${ARG}
+		download ${ARG} ${SETSDIR} "${ARG}-*"
+		;;
+	logs)
+		sh ./clean.sh ${ARG}
+		download ${ARG} ${LOGSDIR} "[0-9]*"
+		;;
+	packages|release)
+		sh ./clean.sh ${ARG}
+		download ${ARG} ${SETSDIR} "${ARG}-*-${PRODUCT_FLAVOUR}-*"
+		;;
+	esac
+done

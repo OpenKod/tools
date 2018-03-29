@@ -1,6 +1,6 @@
 #!/bin/sh
 
-# Copyright (c) 2015 Franco Fichtner <franco@opnsense.org>
+# Copyright (c) 2015-2017 Franco Fichtner <franco@opnsense.org>
 #
 # Redistribution and use in source and binary forms, with or without
 # modification, are permitted provided that the following conditions
@@ -27,33 +27,36 @@
 
 set -e
 
-. ./common.sh && $(${SCRUB_ARGS})
+SELF=release
 
-if [ -n "${1}" ]; then
-	# make sure the all-encompassing package is a release, too
-	setup_stage ${STAGEDIR}
-	extract_packages ${STAGEDIR}
-	if [ ! -f ${STAGEDIR}${PACKAGESDIR}/All/opnsense-${1}.txz ]; then
-		echo "Release version mismatch:"
-		(cd ${STAGEDIR}${PACKAGESDIR}/All; ls opnsense-*.txz)
-		exit 1
-	fi
+. ./common.sh
+
+RELEASE_SET=$(find ${SETSDIR} -name "release-*-${PRODUCT_ARCH}.tar")
+
+if [ -f "${RELEASE_SET}" -a -z "${1}" ]; then
+	echo ">>> Reusing release set: ${RELEASE_SET}"
+	exit 0
 fi
 
-sh ./clean.sh release images
+RELEASE_SET="${SETSDIR}/release-${PRODUCT_VERSION}-${PRODUCT_FLAVOUR}-${PRODUCT_ARCH}.tar"
 
-echo ">>> Creating images for ${PRODUCT_RELEASE}"
-
-sh ./memstick.sh
-sh ./nano.sh
-sh ./iso.sh
-
+# make sure the all-encompassing package is a release, too
 setup_stage ${STAGEDIR}
+extract_packages ${STAGEDIR}
+if [ ! -f ${STAGEDIR}${PACKAGESDIR}/All/${PRODUCT_CORE}-${PRODUCT_VERSION}.txz ]; then
+	echo "Release package version mismatch:" \
+	    "$(basename ${STAGEDIR}${PACKAGESDIR}/All/${PRODUCT_CORE}-[0-9]*.txz)"
+	exit 1
+fi
+
+sh ./clean.sh ${SELF}
+
+setup_stage ${STAGEDIR} tmp work
 
 echo -n ">>> Compressing images for ${PRODUCT_RELEASE}... "
 
-mv ${IMAGESDIR}/${PRODUCT_RELEASE}-* ${STAGEDIR}
-for IMAGE in $(ls ${STAGEDIR}/${PRODUCT_RELEASE}-*); do
+mv ${IMAGESDIR}/${PRODUCT_NAME}-*-${PRODUCT_ARCH}.* ${STAGEDIR}/work
+for IMAGE in $(find ${STAGEDIR}/work -type f); do
 	bzip2 ${IMAGE} &
 done
 wait
@@ -62,16 +65,24 @@ echo "done"
 
 echo -n ">>> Checksumming images for ${PRODUCT_RELEASE}... "
 
-mkdir -p ${STAGEDIR}/tmp
-cd ${STAGEDIR} && sha256 ${PRODUCT_RELEASE}-* > tmp/${PRODUCT_RELEASE}-checksums-${ARCH}.sha256
-cd ${STAGEDIR} && md5 ${PRODUCT_RELEASE}-* > tmp/${PRODUCT_RELEASE}-checksums-${ARCH}.md5
-
-mv tmp/* .
-rm -rf tmp
+(cd ${STAGEDIR}/work && sha256 ${PRODUCT_RELEASE}-*) \
+    > ${STAGEDIR}/tmp/${PRODUCT_RELEASE}-checksums-${PRODUCT_ARCH}.sha256
 
 echo "done"
 
-echo -n ">>> Bundling images for ${PRODUCT_RELEASE}... "
+for IMAGE in $(find ${STAGEDIR}/work -name "${PRODUCT_RELEASE}-*"); do
+	sign_image ${IMAGE} ${STAGEDIR}/tmp/$(basename ${IMAGE}).sig
+done
 
-tar -cf ${SETSDIR}/release-${PRODUCT_VERSION}_${PRODUCT_FLAVOUR}-${ARCH}.tar .
+mv ${STAGEDIR}/tmp/* ${STAGEDIR}/work/
+
+if [ -f "${PRODUCT_PRIVKEY}" ]; then
+	# checked for private key, but want the public key to
+	# be able to verify the images on the mirror later on
+	cp "${PRODUCT_PUBKEY}" \
+	    "${STAGEDIR}/work/${PRODUCT_NAME}-${PRODUCT_SETTINGS}.pub"
+fi
+
+echo -n ">>> Bundling images for ${PRODUCT_RELEASE}... "
+tar -C ${STAGEDIR}/work -cf ${RELEASE_SET} .
 echo "done"

@@ -1,6 +1,6 @@
 #!/bin/sh
 
-# Copyright (c) 2014-2015 Franco Fichtner <franco@opnsense.org>
+# Copyright (c) 2014-2017 Franco Fichtner <franco@opnsense.org>
 #
 # Redistribution and use in source and binary forms, with or without
 # modification, are permitted provided that the following conditions
@@ -27,35 +27,102 @@
 
 set -e
 
-. ./common.sh && $(${SCRUB_ARGS})
+SELF=clean
+
+. ./common.sh
 
 for ARG in ${@}; do
 	case ${ARG} in
-	stage)
-		setup_stage ${STAGEDIR}
-		;;
-	obj)
-		setup_stage /usr/obj
-		;;
-	images)
-		echo ">>> Removing images"
-		rm -rf ${IMAGESDIR}
-		;;
-	kernel)
-		echo ">>> Removing kernel set"
-		rm -f ${SETSDIR}/kernel-*-${ARCH}.txz
+	arm)
+		echo ">>> Removing arm image"
+		rm -f ${IMAGESDIR}/*-${PRODUCT_FLAVOUR}-arm-${PRODUCT_ARCH}.img
 		;;
 	base)
 		echo ">>> Removing base set"
-		rm -f ${SETSDIR}/base-*-${ARCH}.txz
+		rm -f ${SETSDIR}/base-*-${PRODUCT_ARCH}.*
 		;;
-	packages)
+	core)
+		echo ">>> Removing core from packages set"
+		setup_stage ${STAGEDIR}
+		setup_base ${STAGEDIR}
+		extract_packages ${STAGEDIR}
+		remove_packages ${STAGEDIR} ${PRODUCT_CORES}
+		bundle_packages ${STAGEDIR} ${SELF} core
+		;;
+	distfiles)
+		echo ">>> Removing distfiles set"
+		rm -f ${SETSDIR}/distfiles-*.tar
+		;;
+	dvd)
+		echo ">>> Removing dvd image"
+		rm -f ${IMAGESDIR}/*-${PRODUCT_FLAVOUR}-dvd-${PRODUCT_ARCH}.iso
+		;;
+	images)
+		setup_stage ${IMAGESDIR}
+		;;
+	kernel)
+		echo ">>> Removing kernel set"
+		rm -f ${SETSDIR}/kernel-*-${PRODUCT_ARCH}.*
+		;;
+	logs)
+		setup_stage ${LOGSDIR}
+		;;
+	nano)
+		echo ">>> Removing nano image"
+		rm -f ${IMAGESDIR}/*-${PRODUCT_FLAVOUR}-nano-${PRODUCT_ARCH}.img
+		;;
+	obj)
+		if [ -d ${STAGEDIRPREFIX}${TOOLSDIR} ]; then
+			for DIR in $(find ${STAGEDIRPREFIX}${TOOLSDIR} \
+			    -type d -depth 3); do
+				setup_stage ${DIR}
+			done
+		fi
+		for DIR in $(find /usr/obj -type d -depth 1); do
+			setup_stage ${DIR}
+			rm -rf ${DIR}
+		done
+		;;
+	packages|ports)
 		echo ">>> Removing packages set"
-		rm -f ${SETSDIR}/packages-*_${PRODUCT_FLAVOUR}-${ARCH}.tar
+		rm -f ${SETSDIR}/packages-*-${PRODUCT_FLAVOUR}-${PRODUCT_ARCH}.*
+		;;
+	plugins)
+		echo ">>> Removing plugins from packages set"
+		setup_stage ${STAGEDIR}
+		setup_base ${STAGEDIR}
+		extract_packages ${STAGEDIR}
+		remove_packages ${STAGEDIR} ${PRODUCT_PLUGINS}
+		bundle_packages ${STAGEDIR} ${SELF} plugins
 		;;
 	release)
 		echo ">>> Removing release set"
-		rm -f ${SETSDIR}/release-*_${PRODUCT_FLAVOUR}-${ARCH}.tar
+		rm -f ${SETSDIR}/release-*-${PRODUCT_FLAVOUR}-${PRODUCT_ARCH}.tar
+		;;
+	serial)
+		echo ">>> Removing serial image"
+		rm -f ${IMAGESDIR}/*-${PRODUCT_FLAVOUR}-serial-${PRODUCT_ARCH}.img
+		;;
+	sets)
+		setup_stage ${SETSDIR}
+		;;
+	stage)
+		setup_stage ${STAGEDIR}
+		;;
+	src)
+		setup_stage /usr/obj${SRCDIR}
+		;;
+	vga)
+		echo ">>> Removing vga image"
+		rm -f ${IMAGESDIR}/*-${PRODUCT_FLAVOUR}-vga-${PRODUCT_ARCH}.img
+		;;
+	vm)
+		echo ">>> Removing vm image"
+		rm -f ${IMAGESDIR}/*-${PRODUCT_FLAVOUR}-vm-${PRODUCT_ARCH}.*
+		;;
+	xtools)
+		echo ">>> Removing xtools set"
+		rm -f ${SETSDIR}/xtools-*-${PRODUCT_ARCH}.*
 		;;
 	esac
 done

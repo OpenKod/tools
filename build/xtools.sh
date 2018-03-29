@@ -1,6 +1,6 @@
 #!/bin/sh
 
-# Copyright (c) 2014-2017 Franco Fichtner <franco@opnsense.org>
+# Copyright (c) 2016-2017 Franco Fichtner <franco@opnsense.org>
 #
 # Redistribution and use in source and binary forms, with or without
 # modification, are permitted provided that the following conditions
@@ -27,40 +27,40 @@
 
 set -e
 
-SELF=core
+SELF=xtools
 
 . ./common.sh
 
-check_packages ${SELF} ${@}
+if [ ${PRODUCT_HOST} = ${PRODUCT_ARCH} ]; then
+	echo ">>> No need to build xtools on native build"
+	exit 0
+fi
 
-git_branch ${COREDIR} ${COREBRANCH} COREBRANCH
+XTOOLS_SET=$(find ${SETSDIR} -name "xtools-*-${PRODUCT_ARCH}.txz")
+
+if [ -f "${XTOOLS_SET}" -a -z "${1}" ]; then
+	echo ">>> Reusing xtools set: ${XTOOLS_SET}"
+	exit 0
+fi
+
+git_branch ${SRCDIR} ${SRCBRANCH} SRCBRANCH
+git_describe ${SRCDIR}
+
+XTOOLS_SET=${SETSDIR}/xtools-${REPO_VERSION}-${PRODUCT_ARCH}.txz
+
+sh ./clean.sh ${SELF}
 
 setup_stage ${STAGEDIR}
-setup_base ${STAGEDIR}
-setup_chroot ${STAGEDIR}
 
-extract_packages ${STAGEDIR}
-remove_packages ${STAGEDIR} ${@}
-# register persistent packages to avoid bouncing
-install_packages ${STAGEDIR} pkg git
-lock_packages ${STAGEDIR}
+MAKE_ARGS="TARGET_ARCH=${PRODUCT_ARCH} TARGET=${PRODUCT_TARGET}"
+MAKE_ARGS="${MAKE_ARGS} SRCCONF=${CONFIGDIR}/src.conf __MAKE_CONF="
 
-for BRANCH in master ${COREBRANCH}; do
-	setup_copy ${STAGEDIR} ${COREDIR}
-	git_reset ${STAGEDIR}${COREDIR} ${BRANCH}
+${ENV_FILTER} make -C${SRCDIR} -j${CPUS} native-xtools ${MAKE_ARGS} NO_CLEAN=yes
 
-	CORE_ARGS="CORE_ARCH=${PRODUCT_ARCH} ${COREENV}"
+XTOOLS_DIR=$(make -C${SRCDIR} -f Makefile.inc1 -V OBJTREE ${MAKE_ARGS})/nxb-bin
 
-	CORE_NAME=$(make -C ${STAGEDIR}${COREDIR} ${CORE_ARGS} name)
-	CORE_DEPS=$(make -C ${STAGEDIR}${COREDIR} ${CORE_ARGS} depends)
+echo -n ">>> Generating xtools set... "
 
-	if search_packages ${STAGEDIR} ${CORE_NAME}; then
-		# already built
-		continue
-	fi
+tar -C ${XTOOLS_DIR} -cJf ${XTOOLS_SET} .
 
-	install_packages ${STAGEDIR} ${CORE_DEPS}
-	custom_packages ${STAGEDIR} ${COREDIR} "${CORE_ARGS}"
-done
-
-bundle_packages ${STAGEDIR} ${SELF}
+echo "done"
